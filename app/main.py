@@ -3,7 +3,10 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Command, interrupt
 from langgraph.checkpoint.memory import InMemorySaver
 from  dotenv import load_dotenv
+from app.nodes import retreive_chunks 
+from app.schemas.pydantic_schemas import TicketType, ClassificationResult, CriticResult  
 import os
+import json
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -35,18 +38,31 @@ def return_chunk():
 
 def classify(state : TicketState):
     llm = OpenAI()
-    # response = llm.response.create(
-    #     model="gpt-4o",
-    #     input = f"Classify the following ticket text into a category: {state['ticket_text']}. Provide the category and confidence score."
-    # )
-    # result = float(response.choices[0].message.content.split(":")[1])
-    return {"category": "Support", "confidence": 0.8}  # Placeholder confidence
+    response = llm.chat.completions.parse(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a helpful assistant that classifies support tickets into categories: Technical, Billing, or General Support. Provide the category and a confidence score between 0 and 1."},
+                  {"role": "user", "content": f"Classify the following ticket text:{state['ticket_text']}"}
+        ],
+        response_format=ClassificationResult
+    )
+    result = response.choices[0].message.content
+    print("result:", result)
+    dict_result = json.loads(result)
+    print("result type:", type(dict_result))
+    return_dict = {"category": dict_result["category"], "confidence": dict_result["confidence"]}
+    return  ClassificationResult(**return_dict)  # Placeholder confidence
 
 def retrieve_context(state : TicketState):
     llm = OpenAI()
-    chunk = return_chunk()
+    chunks = retreive_chunks(state['ticket_text'])
+    print("Retrieved chunks:", chunks)
+    context = ""
+    for chunk in chunks[0]:
+        print("hi")
+        context += chunk + "\n"
     
-    return {"retrieved_context": chunk}  # Placeholder context
+    print("Retrieved context:", context)
+    return {"retrieved_context": context}  # Placeholder context
 
 def resolve(state : TicketState):
     llm = OpenAI()
@@ -62,11 +78,21 @@ def resolve(state : TicketState):
 
 def critic(state: TicketState):
     llm = OpenAI()
-    resolved = 'resolved' in state.get('resolution', '').lower()
+    response = llm.chat.completions.parse(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a helpful assistant that criticizes the resolution of support tickets. Provide a boolean indicating if the ticket is resolved  and if not a rejection reason."},
+                  {"role": "user", "content": f"Critique  the following ticket resolution: {state.get('resolution', '')}"}
+        ],
+        response_format=CriticResult
+    )
+    result =json.loads(response.choices[0].message.content)
+    
+    resolved = result["resolved"]
+    rejection_reason = result.get('rejection_reason', None)
     if resolved:
         return {"resolved": True}
     else:
-        return {"resolved": False, "retry_count": state.get('retry_count', 0) + 1}
+        return {"resolved": False, "rejection_reason": rejection_reason, "retry_count": state.get('retry_count', 0) + 1}
 
 def route_from_critics(state: TicketState):
     if state.get('resolved'):
