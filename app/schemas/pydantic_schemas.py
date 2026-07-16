@@ -15,3 +15,7 @@ class ClassificationResult(BaseModel):
 class CriticResult(BaseModel):
     resolved: bool
     rejection_reason: str = Field( default=None)
+
+class ResolutionResult(BaseModel):
+    resolution: str = Field(..., description="The resolution of the ticket")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="The confidence score of the resolution")

@@ -4,9 +4,12 @@ from langgraph.types import Command, interrupt
 from langgraph.checkpoint.memory import InMemorySaver
 from  dotenv import load_dotenv
 from app.nodes import retreive_chunks 
-from app.schemas.pydantic_schemas import TicketType, ClassificationResult, CriticResult  
+from typing import Annotated
+import operator
+from app.schemas.pydantic_schemas import TicketType, ClassificationResult, CriticResult, ResolutionResult
 import os
 import json
+
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -24,8 +27,9 @@ class TicketState(TypedDict):
     category : Optional[str]
     confidence : Optional[float]
     retrieved_context : Optional[str]
-    resolution : Optional[str]
-    resolved : Optional[bool]
+    resolution : Annotated[list[str], operator.add]
+    resolved : Annotated[list[bool],operator.add]
+    rejection_reason : Annotated[list[str], operator.add]
     retry_count : Optional[int]
 
 graph = StateGraph(TicketState)
@@ -66,21 +70,27 @@ def retrieve_context(state : TicketState):
 
 def resolve(state : TicketState):
     llm = OpenAI()
-    # response = llm.response.create(
-    #     model="gpt-4o",
-    #     input = f"Resolve the following ticket text: {state['ticket_text']}. Use the context: {state.get('retrieved_context', '')}."
-    # )
-    resolved = interrupt("Please provide a resolution for the ticket.")
-    if resolved :
-        print("Value of resolved:", resolved)
-        return {"resolution": "Issue resolved by human intervention."}
-    return {"resolution": "The issue has been resolved by bot."}  # Placeholder resolution
+    response = llm.chat.completions.parse(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a helpful assistant that resolves support tickets. Provide a resolution for the ticket based on the context."},
+                  {"role": "user", "content": f"Resolve the following ticket text: {state['ticket_text']}. Use the context: {state.get('retrieved_context', '')}."}
+        ],
+        response_format=ResolutionResult
+    )
+    result = json.loads(response.choices[0].message.content)
+    if result["confidence"] < 0.5 or state.get('retry_count',0) >= 2:
+        resolved = interrupt("Please provide a resolution for the ticket.")
+        if resolved:
+            print("Value of resolved:", resolved)
+            return {"resolution": "Issue resolved by human intervention."}
+    else:
+        return {"resolution": [f"{result['resolution']}"]}  # Placeholder resolution
 
 def critic(state: TicketState):
     llm = OpenAI()
     response = llm.chat.completions.parse(
         model="gpt-4o",
-        messages=[{"role": "system", "content": "You are a helpful assistant that criticizes the resolution of support tickets. Provide a boolean indicating if the ticket is resolved  and if not a rejection reason."},
+        messages=[{"role": "system", "content": "You are a helpful assistant that criticizes the resolution of support tickets. Provide a boolean indicating if the ticket is resolved  and if not a rejection reason. Check properly wether ticket has really been resolved and were the specifics mentioned."},
                   {"role": "user", "content": f"Critique  the following ticket resolution: {state.get('resolution', '')}"}
         ],
         response_format=CriticResult
@@ -90,9 +100,9 @@ def critic(state: TicketState):
     resolved = result["resolved"]
     rejection_reason = result.get('rejection_reason', None)
     if resolved:
-        return {"resolved": True}
+        return {"resolved": [True]}
     else:
-        return {"resolved": False, "rejection_reason": rejection_reason, "retry_count": state.get('retry_count', 0) + 1}
+        return {"resolved": [False], "rejection_reason": [rejection_reason], "retry_count": state.get('retry_count', 0) + 1}
 
 def route_from_critics(state: TicketState):
     if state.get('resolved'):
@@ -127,4 +137,6 @@ if __name__ == "__main__":
     state_snapshot = app.get_state(config)
     print("Current Values:", state_snapshot.values)
     result2 = app.invoke(Command(resume=""), config=config)
+    state_snapshot = app.get_state(config)
+    print("Final Values:", state_snapshot.values)
     print(result2)
