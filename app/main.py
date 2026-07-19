@@ -78,7 +78,7 @@ def resolve(state : TicketState):
         response_format=ResolutionResult
     )
     result = json.loads(response.choices[0].message.content)
-    if result["confidence"] < 0.5 or state.get('retry_count',0) >= 2:
+    if result["confidence"] < 0.5 or state.get('retry_count',0) <= 2:
         resolved = interrupt("Please provide a resolution for the ticket.")
         if resolved:
             print("Value of resolved:", resolved)
@@ -105,7 +105,7 @@ def critic(state: TicketState):
         return {"resolved": [False], "rejection_reason": [rejection_reason], "retry_count": state.get('retry_count', 0) + 1}
 
 def route_from_critics(state: TicketState):
-    if state.get('resolved'):
+    if state.get('resolved')[-1]:
         return "END"
     elif state.get('retry_count', 0) >= 3:
         return "END"
@@ -133,10 +133,18 @@ app = graph.compile(checkpointer=memory)
 
 
 if __name__ == "__main__":
-    result1 = app.invoke({"ticket_text": "The application crashes when I try to upload a file."}, config=config)
+    # result1 = app.invoke({"ticket_text": "The application crashes when I try to upload a file."}, config=config)
+    for event in app.stream({"ticket_text": "The application crashes when I try to upload a file."}, config):
+        print("Graph event:", event)
     state_snapshot = app.get_state(config)
+    print(state_snapshot)
     print("Current Values:", state_snapshot.values)
-    result2 = app.invoke(Command(resume=""), config=config)
-    state_snapshot = app.get_state(config)
+    print("Next Nodes", state_snapshot.next)
+    print(type(state_snapshot.next))
+    while len(state_snapshot.next):
+        result2 = app.invoke(Command(resume=""), config=config)
+        state_snapshot = app.get_state(config)
+        print("Next Nodes Final", state_snapshot.next)
+    
     print("Final Values:", state_snapshot.values)
     print(result2)
