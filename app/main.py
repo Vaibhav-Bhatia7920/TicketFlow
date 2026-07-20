@@ -82,7 +82,9 @@ def resolve(state : TicketState):
         resolved = interrupt("Please provide a resolution for the ticket.")
         if resolved:
             print("Value of resolved:", resolved)
-            return {"resolution": "Issue resolved by human intervention."}
+            return {"resolution": ["Issue resolved by human intervention."]}
+        else:
+            return {"resolution": [f"{result['resolution']}"]}
     else:
         return {"resolution": [f"{result['resolution']}"]}  # Placeholder resolution
 
@@ -91,7 +93,7 @@ def critic(state: TicketState):
     response = llm.chat.completions.parse(
         model="gpt-4o",
         messages=[{"role": "system", "content": "You are a helpful assistant that criticizes the resolution of support tickets. Provide a boolean indicating if the ticket is resolved  and if not a rejection reason. Check properly wether ticket has really been resolved and were the specifics mentioned."},
-                  {"role": "user", "content": f"Critique  the following ticket resolution: {state.get('resolution', '')}"}
+                  {"role": "user", "content": f"Critique  the following ticket resolution: {state.get('resolution', '')}. If it is solved by human you should not critique it but if it is not by Human, critique it. If the solution is given, then you can pass it and not crititque."}
         ],
         response_format=CriticResult
     )
@@ -142,8 +144,9 @@ if __name__ == "__main__":
     print("Next Nodes", state_snapshot.next)
     print(type(state_snapshot.next))
     while len(state_snapshot.next):
-        result2 = app.invoke(Command(resume=""), config=config)
+        result2 = app.invoke(Command(resume="Yes"), config=config)
         state_snapshot = app.get_state(config)
+        print(state_snapshot.values)
         print("Next Nodes Final", state_snapshot.next)
     
     print("Final Values:", state_snapshot.values)
